@@ -154,23 +154,21 @@ class PiHoleManager:
             return None
 
     # ======================================================
-    # SAVE HOSTS
+    # SAVE DNS
     # ======================================================
 
-    def save_hosts(self, hosts):
+    def save_dns(self, hosts, cnames):
 
         try:
 
             payload = {
                 "config": {
                     "dns": {
-                        "hosts": hosts
+                        "hosts": hosts,
+                        "cnameRecords": cnames
                     }
                 }
             }
-
-            print("\nDEBUG SAVE PAYLOAD:")
-            print(payload)
 
             response = self.session.patch(
                 f"{self.url}/api/config",
@@ -179,13 +177,10 @@ class PiHoleManager:
                 verify=False
             )
 
-            print("\nDEBUG RESPONSE:")
-            print(response.status_code)
-            print(response.text)
-
             if response.status_code not in [200, 201]:
 
                 print("\n❌ Помилка збереження")
+                print(response.text)
 
                 log_action(
                     "SAVE_CONFIG",
@@ -198,7 +193,7 @@ class PiHoleManager:
             log_action(
                 "SAVE_CONFIG",
                 "OK",
-                f"records={len(hosts)}"
+                f"hosts={len(hosts)} cnames={len(cnames)}"
             )
 
             return True
@@ -216,10 +211,10 @@ class PiHoleManager:
             return False
 
     # ======================================================
-    # GET RECORDS
+    # GET HOSTS
     # ======================================================
 
-    def get_records(self):
+    def get_hosts(self):
 
         config = self.get_config()
 
@@ -230,9 +225,6 @@ class PiHoleManager:
         hosts = dns.get("hosts", [])
 
         records = []
-
-        print("\nDEBUG HOSTS:")
-        print(hosts)
 
         if not isinstance(hosts, list):
             return []
@@ -251,7 +243,50 @@ class PiHoleManager:
 
                 records.append({
                     "domain": domain,
-                    "address": ip
+                    "address": ip,
+                    "type": "A"
+                })
+
+            except Exception:
+                pass
+
+        return records
+
+    # ======================================================
+    # GET CNAMES
+    # ======================================================
+
+    def get_cnames(self):
+
+        config = self.get_config()
+
+        if not config:
+            return []
+
+        dns = config.get("dns", {})
+        cnames = dns.get("cnameRecords", [])
+
+        records = []
+
+        if not isinstance(cnames, list):
+            return []
+
+        for item in cnames:
+
+            try:
+
+                parts = item.strip().split(",")
+
+                if len(parts) < 2:
+                    continue
+
+                alias = parts[0].strip()
+                target = parts[1].strip()
+
+                records.append({
+                    "alias": alias,
+                    "target": target,
+                    "type": "CNAME"
                 })
 
             except Exception:
@@ -265,20 +300,97 @@ class PiHoleManager:
 
     def print_records(self):
 
-        records = self.get_records()
+        hosts = self.get_hosts()
+        cnames = self.get_cnames()
 
         print("\n================================================")
-        print(" LOCAL DNS RECORDS")
+        print(" DNS RECORDS")
         print("================================================")
 
-        if not records:
+        print("\n--- HOST RECORDS ---")
 
-            print("Немає записів")
-            print("================================================\n")
+        if not hosts:
+            print("Немає host записів")
 
-            return records
+        for idx, record in enumerate(hosts, start=1):
 
-        for idx, record in enumerate(records, start=1):
+            print(
+                f"{idx}. [A] "
+                f"{record['domain']} -> "
+                f"{record['address']}"
+            )
+
+        print("\n--- CNAME RECORDS ---")
+
+        if not cnames:
+            print("Немає CNAME записів")
+
+        for idx, record in enumerate(cnames, start=1):
+
+            print(
+                f"{idx}. [CNAME] "
+                f"{record['alias']} -> "
+                f"{record['target']}"
+            )
+
+        print("================================================\n")
+
+    # ======================================================
+    # ADD HOST RECORD
+    # ======================================================
+
+    def add_host_record(self):
+
+        host = input("Hostname: ").strip()
+        ip = input("IP Address: ").strip()
+
+        new_record = f"{ip} {host}"
+
+        print(f"\nДодати HOST запис: {new_record}")
+
+        confirm = input("Підтвердити? (yes/no): ").lower()
+
+        if confirm != "yes":
+            return
+
+        config = self.get_config()
+
+        dns = config.get("dns", {})
+
+        hosts = dns.get("hosts", [])
+        cnames = dns.get("cnameRecords", [])
+
+        if new_record in hosts:
+            print("\n⚠️ Запис вже існує")
+            return
+
+        hosts.append(new_record)
+
+        if self.save_dns(hosts, cnames):
+
+            print("\n✅ HOST запис додано")
+
+            log_action(
+                "ADD_HOST",
+                "OK",
+                new_record
+            )
+
+    # ======================================================
+    # DELETE HOST RECORD
+    # ======================================================
+
+    def delete_host_record(self):
+
+        hosts = self.get_hosts()
+
+        if not hosts:
+            print("Немає HOST записів")
+            return
+
+        print("--- HOST RECORDS ---")
+
+        for idx, record in enumerate(hosts, start=1):
 
             print(
                 f"{idx}. "
@@ -286,251 +398,163 @@ class PiHoleManager:
                 f"{record['address']}"
             )
 
-        print("================================================\n")
-
-        return records
-
-    # ======================================================
-    # ADD RECORD
-    # ======================================================
-
-    def add_record(self):
-
-        host = input("Hostname: ").strip()
-        ip = input("IP Address: ").strip()
-
-        new_record = f"{ip} {host}"
-
-        print("\nНовий запис:")
-        print(new_record)
-
-        confirm = input("\nПідтвердити? (yes/no): ").lower()
-
-        if confirm != "yes":
-
-            print("Скасовано")
-
-            log_action(
-                "ADD_RECORD",
-                "CANCELLED",
-                new_record
-            )
-
-            return
-
-        config = self.get_config()
-
-        if not config:
-            return
-
-        dns = config.get("dns", {})
-        hosts = dns.get("hosts", [])
-
-        if not isinstance(hosts, list):
-            hosts = []
-
-        if new_record in hosts:
-
-            print("\n⚠️ Запис вже існує")
-            return
-
-        hosts.append(new_record)
-
-        if self.save_hosts(hosts):
-
-            print("\n✅ Запис додано")
-
-            log_action(
-                "ADD_RECORD",
-                "OK",
-                new_record
-            )
-
-    # ======================================================
-    # DELETE RECORD
-    # ======================================================
-
-    def delete_record(self):
-
-        records = self.print_records()
-
-        if not records:
-            return
-
         try:
 
-            index = int(
-                input("Номер запису для видалення: ")
-            ) - 1
+            index = int(input("Номер запису: ")) - 1
 
-            if index < 0 or index >= len(records):
-
+            if index < 0 or index >= len(hosts):
                 print("Невірний номер")
                 return
 
-            record = records[index]
+            record = hosts[index]
 
             record_string = (
                 f"{record['address']} "
                 f"{record['domain']}"
             )
 
-            print("\nВидалити запис:")
-            print(record_string)
-
-            confirm = input("\nПідтвердити? (yes/no): ").lower()
+            confirm = input(
+                f"Видалити {record_string}? (yes/no): "
+            ).lower()
 
             if confirm != "yes":
-
-                print("Скасовано")
-
-                log_action(
-                    "DELETE_RECORD",
-                    "CANCELLED",
-                    record_string
-                )
-
                 return
 
             config = self.get_config()
 
-            if not config:
-                return
-
             dns = config.get("dns", {})
-            hosts = dns.get("hosts", [])
 
-            if not isinstance(hosts, list):
-                hosts = []
+            host_records = dns.get("hosts", [])
+            cnames = dns.get("cnameRecords", [])
 
-            hosts = [
-                x for x in hosts
+            host_records = [
+                x for x in host_records
                 if x != record_string
             ]
 
-            if self.save_hosts(hosts):
+            if self.save_dns(host_records, cnames):
 
-                print("\n✅ Запис видалено")
+                print("✅ HOST запис видалено")
 
                 log_action(
-                    "DELETE_RECORD",
+                    "DELETE_HOST",
                     "OK",
                     record_string
                 )
 
         except Exception as e:
 
-            print(f"\n❌ Помилка: {e}")
+            print(f"❌ Помилка: {e}")
 
             log_action(
-                "DELETE_RECORD",
+                "DELETE_HOST",
                 "ERROR",
                 str(e)
             )
 
     # ======================================================
-    # EDIT RECORD
+    # ADD CNAME RECORD
     # ======================================================
 
-    def edit_record(self):
+    def add_cname_record(self):
 
-        records = self.print_records()
+        alias = input("Alias: ").strip()
+        target = input("Target hostname: ").strip()
 
-        if not records:
+        new_record = f"{alias},{target}"
+
+        print(f"\nДодати CNAME запис: {alias} -> {target}")
+
+        confirm = input("Підтвердити? (yes/no): ").lower()
+
+        if confirm != "yes":
             return
 
-        try:
+        config = self.get_config()
 
-            index = int(
-                input("Номер запису для редагування: ")
-            ) - 1
+        dns = config.get("dns", {})
 
-            if index < 0 or index >= len(records):
+        hosts = dns.get("hosts", [])
+        cnames = dns.get("cnameRecords", [])
 
-                print("Невірний номер")
-                return
+        if new_record in cnames:
+            print("\n⚠️ Запис вже існує")
+            return
 
-            record = records[index]
+        cnames.append(new_record)
 
-            old_record = (
-                f"{record['address']} "
-                f"{record['domain']}"
-            )
+        if self.save_dns(hosts, cnames):
 
-            print("\nПоточний запис:")
-            print(old_record)
-
-            new_host = input(
-                f"Hostname [{record['domain']}]: "
-            ).strip()
-
-            new_ip = input(
-                f"IP [{record['address']}]: "
-            ).strip()
-
-            if not new_host:
-                new_host = record["domain"]
-
-            if not new_ip:
-                new_ip = record["address"]
-
-            new_record = f"{new_ip} {new_host}"
-
-            print("\nНовий запис:")
-            print(new_record)
-
-            confirm = input("\nПідтвердити? (yes/no): ").lower()
-
-            if confirm != "yes":
-
-                print("Скасовано")
-
-                log_action(
-                    "EDIT_RECORD",
-                    "CANCELLED",
-                    old_record
-                )
-
-                return
-
-            config = self.get_config()
-
-            if not config:
-                return
-
-            dns = config.get("dns", {})
-            hosts = dns.get("hosts", [])
-
-            if not isinstance(hosts, list):
-                hosts = []
-
-            # Видалити старий
-            hosts = [
-                x for x in hosts
-                if x != old_record
-            ]
-
-            # Додати новий
-            hosts.append(new_record)
-
-            if self.save_hosts(hosts):
-
-                print("\n✅ Запис оновлено")
-
-                log_action(
-                    "EDIT_RECORD",
-                    "OK",
-                    f"{old_record} -> {new_record}"
-                )
-
-        except Exception as e:
-
-            print(f"\n❌ Помилка: {e}")
+            print("\n✅ CNAME запис додано")
 
             log_action(
-                "EDIT_RECORD",
-                "ERROR",
-                str(e)
+                "ADD_CNAME",
+                "OK",
+                new_record
+            )
+
+    # ======================================================
+    # DELETE CNAME
+    # ======================================================
+
+    def delete_cname_record(self):
+
+        cnames = self.get_cnames()
+
+        if not cnames:
+            print("Немає CNAME записів")
+            return
+
+        print("\n--- CNAME RECORDS ---")
+
+        for idx, record in enumerate(cnames, start=1):
+
+            print(
+                f"{idx}. "
+                f"{record['alias']} -> "
+                f"{record['target']}"
+            )
+
+        index = int(input("Номер запису: ")) - 1
+
+        if index < 0 or index >= len(cnames):
+            print("Невірний номер")
+            return
+
+        record = cnames[index]
+
+        record_string = (
+            f"{record['alias']},"
+            f"{record['target']}"
+        )
+
+        confirm = input(
+            f"Видалити {record_string}? (yes/no): "
+        ).lower()
+
+        if confirm != "yes":
+            return
+
+        config = self.get_config()
+
+        dns = config.get("dns", {})
+
+        hosts = dns.get("hosts", [])
+        cname_records = dns.get("cnameRecords", [])
+
+        cname_records = [
+            x for x in cname_records
+            if x != record_string
+        ]
+
+        if self.save_dns(hosts, cname_records):
+
+            print("\n✅ CNAME запис видалено")
+
+            log_action(
+                "DELETE_CNAME",
+                "OK",
+                record_string
             )
 
     # ======================================================
@@ -543,27 +567,31 @@ class PiHoleManager:
 
             self.print_records()
 
-            print("1. Додати запис")
-            print("2. Редагувати запис")
-            print("3. Видалити запис")
-            print("4. Оновити список")
-            print("5. Вийти")
+            print("1. Додати HOST запис")
+            print("2. Видалити HOST запис")
+            print("3. Додати CNAME запис")
+            print("4. Видалити CNAME запис")
+            print("5. Оновити список")
+            print("6. Вийти")
 
             choice = input("\nВаш вибір: ").strip()
 
             if choice == "1":
-                self.add_record()
+                self.add_host_record()
 
             elif choice == "2":
-                self.edit_record()
+                self.delete_host_record()
 
             elif choice == "3":
-                self.delete_record()
+                self.add_cname_record()
 
             elif choice == "4":
-                continue
+                self.delete_cname_record()
 
             elif choice == "5":
+                continue
+
+            elif choice == "6":
 
                 print("\nВихід...")
 
@@ -582,6 +610,7 @@ class PiHoleManager:
 # ==========================================================
 # MAIN
 # ==========================================================
+
 
 def main():
 
